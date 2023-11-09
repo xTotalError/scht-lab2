@@ -53,6 +53,17 @@ def bellman_ford(graph, src, dest, weights):
     return path, dist[dest]
 
 
+def insert_data(id, port_in, port_out):
+    with open("template.json", 'r') as readFile:
+        template = json.load(readFile)
+    template["deviceId"] = template['deviceId'].replace('x', '{:015X}'.format(id).lower())
+    template['treatment']['instrucions'][0]['port'] = str(port_in)
+    template['selector']['criteria'][0]['port'] = str(port_out)
+
+
+def configure_switches(src,dst,network):
+    flows = []
+configure_switches()
 network_graph = readNetwork('network.json')
 source_node = 'h1'
 target_node = 'h10'
@@ -66,6 +77,5 @@ path, value = bellman_ford(network_graph['switches'], starting_switch, ending_sw
 
 if path:
     print(f"Najkrótsza ścieżka między {starting_switch} a {ending_switch}: {path}")
-    print(f"Całkowita wartość parametrów: {value}")
 else:
     print(f"Brak ścieżki między {starting_switch} a {ending_switch}")

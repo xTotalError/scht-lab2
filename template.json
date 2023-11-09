@@ -1,0 +1,21 @@
+{
+  "priority": 40000,
+  "isPermanent": true,
+  "deviceId": "of:x",
+  "treatment": {
+    "instructions": [
+      {
+        "type": "OUTPUT",
+        "port": "p_out"
+      }
+    ]
+  },
+  "selector": {
+    "criteria": [
+      {
+        "type": "IN_PORT",
+        "port": "p_in"
+      }
+    ]
+  }
+}
