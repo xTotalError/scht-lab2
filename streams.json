@@ -1,0 +1,16 @@
+[
+  {
+      "src":"h1",
+      "dst":"h7",
+      "protocol":"tcp",
+      "max_bw":10,
+      "window":36
+    },
+  {
+      "src":"h2",
+      "dst":"h8",
+      "protocol":"tcp",
+      "max_bw":9.5,
+      "window":50
+    }
+]
