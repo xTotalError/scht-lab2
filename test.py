@@ -1,13 +1,10 @@
 import json
-
-import requests
 from operator import itemgetter
+from typing import Dict, Tuple
+
 import networkx as nx
-
-
-def read_network(path_name):
-    with open(path_name, 'r') as readFile:
-        return json.load(readFile)
+import requests
+from requests import Response
 
 
 # def bellman_ford(graph, src, dest, weigh):
@@ -59,6 +56,17 @@ def read_network(path_name):
 #         current = prev[current]
 #
 #     return path
+def read_json_file(file_path: str) -> Dict:
+    try:
+        with open(file_path, 'r') as read_file:
+            data = json.load(read_file)
+        return data
+    except FileNotFoundError:
+        print(f"Error: File '{file_path}' not found.")
+        return {}
+    except json.JSONDecodeError as e:
+        print(f"Error decoding JSON in file '{file_path}': {e}")
+        return {}
 
 
 def insert_data(device_id, port_in, port_out, dst):
@@ -74,27 +82,30 @@ def insert_data(device_id, port_in, port_out, dst):
 def generate_config(ports, path):
     flows = []
     # two-way connection from source host and switch directly linked
-    for i in range(0,len(path)):
+    for i in range(0, len(path)):
+        # the beginning of the link
         if i == 0:
-            src = path[i]
-            dst = path[i+1]
-            flows.append(insert_data(int(src[1:]), len(ports[src]) + 1, ports[src][dst], path[0]))
-            flows.append(insert_data(int(src[1:]), ports[src][dst], len(ports[src]) + 1, path[len(path)-1]))
-        elif i == len(path)-1:
-            src = path[i]
-            dst = path[i-1]
-            flows.append(insert_data(int(src[1:]), ports[src][dst], len(ports[src]) + 1, path[0]))
-            flows.append(insert_data(int(src[1:]), len(ports[src])+1, ports[src][dst], path[len(path)-1]))
+            src: str = path[i]
+            src_id_number: int = int(src[1:])
+            dst = path[i + 1]
+            flows.append(insert_data(src_id_number, len(ports[src]) + 1, ports[src][dst], path[0]))
+            flows.append(insert_data(src_id_number, ports[src][dst], len(ports[src]) + 1, path[len(path) - 1]))
+        elif i == len(path) - 1:
+            src: str = path[i]
+            src_id_number: int = int(src[1:])
+            dst = path[i - 1]
+            flows.append(insert_data(src_id_number, ports[src][dst], len(ports[src]) + 1, path[0]))
+            flows.append(insert_data(src_id_number, len(ports[src]) + 1, ports[src][dst], path[len(path) - 1]))
         else:
-            src = path[i-1]
+            src = path[i - 1]
             curr = path[i]
-            dst = path[i+1]
+            dst = path[i + 1]
             flows.append(insert_data(int(curr[1:]), ports[curr][src], ports[curr][dst], path[0]))
-            flows.append(insert_data(int(curr[1:]), ports[curr][dst], ports[curr][src], path[len(path)-1]))
+            flows.append(insert_data(int(curr[1:]), ports[curr][dst], ports[curr][src], path[len(path) - 1]))
     return {"flows": flows}
 
 
-def request_changes(link, path):
+def request_changes(link, path) -> Response:
     header = {'Content-Type': 'application/json', "Accept": "application/json"}
     content = json.dumps(generate_config(link, path))
     url = "http://192.168.33.104:8181/onos/v1/flows"
@@ -141,8 +152,8 @@ def get_path_with_lowest_connections(paths):
 
 def calculate_delay(path, switches):
     delay = 0
-    for i in range(len(path)-1):
-        delay += float(switches[path[i]][path[i+1]]["delay"][:-2])
+    for i in range(len(path) - 1):
+        delay += float(switches[path[i]][path[i + 1]]["delay"][:-2])
     return delay
 
 
@@ -152,7 +163,7 @@ def get_path_with_minmax_delay(paths, switches, desc, max_delay=float('inf')):
     for path in paths:
         delay = calculate_delay(path, switches)
         if delay <= max_delay:
-            result.append([path,delay])
+            result.append([path, delay])
         else:
             alt_result.append([path, delay])
     if result:
@@ -177,18 +188,22 @@ def find_all_paths(graph, start, end):
     return paths
 
 
-def get_new_flows(path):
-    resp = requests.get(url="http://192.168.33.104:8181/onos/v1/flows/of:" + '{:016X}'.format(int(path[0][1:])).lower(),
-                        auth=('onos', 'rocks'),
-                        headers={"Accept": "application/json"})
-    return resp.url,resp.content["flows"]
+def get_new_flows(path: str) -> Tuple[str, Dict]:
+    url = "http://192.168.33.104:8181/onos/v1/flows/of:" + '{:016X}'.format(int(path[0][1:], 16)).lower()
+    resp = requests.get(url=url, auth=('onos', 'rocks'), headers={"Accept": "application/json"})
+
+    if resp.status_code == 200:
+        return resp.url, resp.json().get("flows", {})
+    else:
+        # Handle HTTP error status codes
+        print(f"Error: {resp.status_code}")
+        return resp.url, {}
 
 
 def simulate_data_stream(nodes, hosts):
-    with open("streams.json", 'r') as read_file:
-        streams = json.load(read_file)
-    with open("ports.json", 'r') as readFile:
-        links = json.load(readFile)
+    streams = read_json_file("streams.json")
+    links = read_json_file("ports.json")
+
     for item in streams:
         src = item['src']
         dst = item['dst']
@@ -196,9 +211,7 @@ def simulate_data_stream(nodes, hosts):
         end_switch = list(hosts[dst])[0]
         protocol = item['protocol']
         if protocol == 'tcp':
-            max_delay = (item['window'] * 8 * 1024 ** 2) / (2*item['max_bw'] * 10 ** 6) if item['max_bw'] != 0 else 0
-            paths_with_max_bw = find_paths_with_max_bw(nodes, src_switch, end_switch)
-
+            max_delay = (item['window'] * 8 * 1024 ** 2) / (2 * item['max_bw'] * 10 ** 6) if item['max_bw'] != 0 else 0
             path = get_path_with_minmax_delay(get_path_with_lowest_connections(
                 find_paths_with_max_bw(nodes, src_switch, end_switch)), nodes, False, max_delay)
 
@@ -214,9 +227,10 @@ def simulate_data_stream(nodes, hosts):
                 nodes[path[i + 1]][path[i]]['bw'] -= item['max_bw']
         elif protocol == 'udp':
             requested_bw = item["b_rate"] * item['b_size'] * 0.008
-            path = get_path_with_minmax_delay(find_paths_with_max_bw(nodes, src_switch, end_switch, requested_bw), nodes,False)
-            for i in range(0, len(path)-1):
-                if nodes[path[i]][path[i+1]]['bw'] > requested_bw:
+            path = get_path_with_minmax_delay(
+                find_paths_with_max_bw(nodes, src_switch, end_switch, requested_bw), nodes, False)
+            for i in range(0, len(path) - 1):
+                if nodes[path[i]][path[i + 1]]['bw'] > requested_bw:
                     nodes[path[i]][path[i + 1]]['bw'] -= requested_bw
                     nodes[path[i + 1]][path[i]]['bw'] -= requested_bw
                 else:
@@ -226,10 +240,7 @@ def simulate_data_stream(nodes, hosts):
 
 
 if __name__ == "__main__":
-    network_graph = read_network('network.json')
-    switch = network_graph['switches']
-    HOSTS = network_graph['hosts']
-    simulate_data_stream(switch, HOSTS)
-
-
-
+    network_graph = read_json_file('network.json')
+    SWITCHES: [] = network_graph['switches']
+    HOSTS: [] = network_graph['hosts']
+    simulate_data_stream(SWITCHES, HOSTS)
