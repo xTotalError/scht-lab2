@@ -5,7 +5,7 @@ from operator import itemgetter
 import networkx as nx
 
 
-def readNetwork(path_name):
+def read_network(path_name):
     with open(path_name, 'r') as readFile:
         return json.load(readFile)
 
@@ -67,7 +67,7 @@ def insert_data(device_id, port_in, port_out, dst):
     template["deviceId"] = template['deviceId'].replace('x', '{:016X}'.format(device_id).lower())
     template['treatment']['instructions'][0]['port'] = str(port_in)
     template['selector']['criteria'][0]['port'] = str(port_out)
-    template['selector']['criteria'][2]['ip'] = template['selector']['criteria'][2]['ip'].replace('y',dst[1:])
+    template['selector']['criteria'][2]['ip'] = template['selector']['criteria'][2]['ip'].replace('y', dst[1:])
     return template
 
 
@@ -98,10 +98,10 @@ def request_changes(link, path):
     header = {'Content-Type': 'application/json', "Accept": "application/json"}
     content = json.dumps(generate_config(link, path))
     url = "http://192.168.33.104:8181/onos/v1/flows"
-    requests.post(url, content, auth=('onos', 'rocks'), headers=header)
+    return requests.post(url, content, auth=('onos', 'rocks'), headers=header)
 
 
-def find_paths_with_max_bw(graph, source, target, protocol, requested_bw=0):
+def find_paths_with_max_bw(graph, source, target, requested_bw=0):
     stack = [(source, [(source, None)], float('inf'))]
     paths = []
 
@@ -133,8 +133,8 @@ def find_paths_with_max_bw(graph, source, target, protocol, requested_bw=0):
 
 def get_path_with_lowest_connections(paths):
     min_path = len(paths[0])
-    for i in range(1,len(paths)):
-        if len(paths[i])<min_path:
+    for i in range(1, len(paths)):
+        if len(paths[i]) < min_path:
             min_path = len(paths[i])
     return [path for path in paths if len(path) <= min_path]
 
@@ -192,19 +192,15 @@ def simulate_data_stream(nodes, hosts):
     for item in streams:
         src = item['src']
         dst = item['dst']
-        G = nx.DiGraph()
-        # Add nodes and edges to the graph
-        for source, destinations in nodes.items():
-            for dest, values in destinations.items():
-                delay = float(values["delay"].replace("ms", ""))
-                G.add_edge(source, dest, delay=delay)
         src_switch = list(hosts[src])[0]
         end_switch = list(hosts[dst])[0]
         protocol = item['protocol']
         if protocol == 'tcp':
             max_delay = (item['window'] * 8 * 1024 ** 2) / (2*item['max_bw'] * 10 ** 6) if item['max_bw'] != 0 else 0
+            paths_with_max_bw = find_paths_with_max_bw(nodes, src_switch, end_switch)
+
             path = get_path_with_minmax_delay(get_path_with_lowest_connections(
-                find_paths_with_max_bw(nodes, src_switch, end_switch, 'tcp')), nodes, False, max_delay)
+                find_paths_with_max_bw(nodes, src_switch, end_switch)), nodes, False, max_delay)
 
             bottleneck = 0
             for i in range(0, len(path) - 1):
@@ -216,25 +212,21 @@ def simulate_data_stream(nodes, hosts):
             for i in range(0, len(path) - 1):
                 nodes[path[i]][path[i + 1]]['bw'] -= item['max_bw']
                 nodes[path[i + 1]][path[i]]['bw'] -= item['max_bw']
-                nodes[path[i]][path[i + 1]]['used_protocol'] = 'tcp'
-                nodes[path[i + 1]][path[i]]['used_protocol'] = 'tcp'
         elif protocol == 'udp':
             requested_bw = item["b_rate"] * item['b_size'] * 0.008
-            path = get_path_with_minmax_delay(find_paths_with_max_bw(nodes, src_switch, end_switch,'udp', requested_bw), nodes,False)
-            for i in range(0,len(path)-1):
+            path = get_path_with_minmax_delay(find_paths_with_max_bw(nodes, src_switch, end_switch, requested_bw), nodes,False)
+            for i in range(0, len(path)-1):
                 if nodes[path[i]][path[i+1]]['bw'] > requested_bw:
                     nodes[path[i]][path[i + 1]]['bw'] -= requested_bw
                     nodes[path[i + 1]][path[i]]['bw'] -= requested_bw
                 else:
                     nodes[path[i]][path[i + 1]]['bw'] = 0
                     nodes[path[i + 1]][path[i]]['bw'] = 0
-                nodes[path[i]][path[i + 1]]['used_protocol'] = 'udp'
-                nodes[path[i + 1]][path[i]]['used_protocol'] = 'udp'
-        request_changes(links, path)
+        response = request_changes(links, path)
 
 
 if __name__ == "__main__":
-    network_graph = readNetwork('network.json')
+    network_graph = read_network('network.json')
     switch = network_graph['switches']
     HOSTS = network_graph['hosts']
     simulate_data_stream(switch, HOSTS)
