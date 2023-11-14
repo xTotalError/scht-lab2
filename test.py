@@ -2,7 +2,6 @@ import json
 from operator import itemgetter
 from typing import Dict, Tuple
 
-import networkx as nx
 import requests
 from requests import Response
 
@@ -81,27 +80,20 @@ def insert_data(device_id, port_in, port_out, dst):
 
 def generate_config(ports, path):
     flows = []
+
     # two-way connection from source host and switch directly linked
-    for i in range(0, len(path)):
-        # the beginning of the link
-        if i == 0:
-            src: str = path[i]
-            src_id_number: int = int(src[1:])
-            dst = path[i + 1]
-            flows.append(insert_data(src_id_number, len(ports[src]) + 1, ports[src][dst], path[0]))
-            flows.append(insert_data(src_id_number, ports[src][dst], len(ports[src]) + 1, path[len(path) - 1]))
-        elif i == len(path) - 1:
-            src: str = path[i]
-            src_id_number: int = int(src[1:])
-            dst = path[i - 1]
-            flows.append(insert_data(src_id_number, ports[src][dst], len(ports[src]) + 1, path[0]))
-            flows.append(insert_data(src_id_number, len(ports[src]) + 1, ports[src][dst], path[len(path) - 1]))
-        else:
-            src = path[i - 1]
-            curr = path[i]
-            dst = path[i + 1]
-            flows.append(insert_data(int(curr[1:]), ports[curr][src], ports[curr][dst], path[0]))
-            flows.append(insert_data(int(curr[1:]), ports[curr][dst], ports[curr][src], path[len(path) - 1]))
+    def add_flow(src: int, src_port: str, dst_port: str, dst: int) -> None:
+        flows.append(insert_data(src, src_port, dst_port, dst))
+
+    for i, switch in enumerate(path):
+        current_id = path[i]
+        src_id = path[i - 1] if i > 0 else None
+        dst_id = path[i + 1] if i < len(path) - 1 else None
+
+        if src_id & dst_id:
+            add_flow(int(current_id[1:]), ports[current_id][src_id], ports[current_id][dst_id], path[0])
+            add_flow(int(current_id[1:]), ports[current_id][src_id], ports[current_id][dst_id], path[-1])
+
     return {"flows": flows}
 
 
@@ -236,7 +228,7 @@ def simulate_data_stream(nodes, hosts):
                 else:
                     nodes[path[i]][path[i + 1]]['bw'] = 0
                     nodes[path[i + 1]][path[i]]['bw'] = 0
-        response = request_changes(links, path)
+        # response = request_changes(links, path)
 
 
 if __name__ == "__main__":
