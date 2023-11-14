@@ -68,9 +68,8 @@ def read_json_file(file_path: str) -> Dict:
         return {}
 
 
-def insert_data(device_id, port_in, port_out, dst):
-    with open("template.json", 'r') as readFile:
-        template = json.load(readFile)
+def insert_data(device_id: int, port_in: str, port_out: str, dst: int) -> [str]:
+    template = read_json_file("template.json")
     template["deviceId"] = template['deviceId'].replace('x', '{:016X}'.format(device_id).lower())
     template['treatment']['instructions'][0]['port'] = str(port_in)
     template['selector']['criteria'][0]['port'] = str(port_out)
@@ -78,7 +77,7 @@ def insert_data(device_id, port_in, port_out, dst):
     return template
 
 
-def generate_config(ports, path):
+def generate_config(ports: [str], path):
     flows = []
 
     # two-way connection from source host and switch directly linked
@@ -90,7 +89,7 @@ def generate_config(ports, path):
         src_id = path[i - 1] if i > 0 else None
         dst_id = path[i + 1] if i < len(path) - 1 else None
 
-        if src_id & dst_id:
+        if src_id and dst_id:
             add_flow(int(current_id[1:]), ports[current_id][src_id], ports[current_id][dst_id], path[0])
             add_flow(int(current_id[1:]), ports[current_id][src_id], ports[current_id][dst_id], path[-1])
 
@@ -149,7 +148,7 @@ def calculate_delay(path, switches):
     return delay
 
 
-def get_path_with_minmax_delay(paths, switches, desc, max_delay=float('inf')):
+def get_path_with_min_or_max_delay(paths, switches, desc, max_delay=float('inf')):
     result = []
     alt_result = []
     for path in paths:
@@ -180,7 +179,7 @@ def find_all_paths(graph, start, end):
     return paths
 
 
-def get_new_flows(path: str) -> Tuple[str, Dict]:
+def get_new_flows(path) -> Tuple[str, Dict]:
     url = "http://192.168.33.104:8181/onos/v1/flows/of:" + '{:016X}'.format(int(path[0][1:], 16)).lower()
     resp = requests.get(url=url, auth=('onos', 'rocks'), headers={"Accept": "application/json"})
 
@@ -204,22 +203,16 @@ def simulate_data_stream(nodes, hosts):
         protocol = item['protocol']
         if protocol == 'tcp':
             max_delay = (item['window'] * 8 * 1024 ** 2) / (2 * item['max_bw'] * 10 ** 6) if item['max_bw'] != 0 else 0
-            path = get_path_with_minmax_delay(get_path_with_lowest_connections(
+            path = get_path_with_min_or_max_delay(get_path_with_lowest_connections(
                 find_paths_with_max_bw(nodes, src_switch, end_switch)), nodes, False, max_delay)
 
-            bottleneck = 0
-            for i in range(0, len(path) - 1):
-                if i == 0:
-                    bottleneck = nodes[path[i]][path[i + 1]]['bw']
-                else:
-                    bottleneck = min(bottleneck, nodes[path[i]][path[i + 1]]['bw'])
             # reduce bandwidth by the value used in connection
             for i in range(0, len(path) - 1):
                 nodes[path[i]][path[i + 1]]['bw'] -= item['max_bw']
                 nodes[path[i + 1]][path[i]]['bw'] -= item['max_bw']
         elif protocol == 'udp':
             requested_bw = item["b_rate"] * item['b_size'] * 0.008
-            path = get_path_with_minmax_delay(
+            path = get_path_with_min_or_max_delay(
                 find_paths_with_max_bw(nodes, src_switch, end_switch, requested_bw), nodes, False)
             for i in range(0, len(path) - 1):
                 if nodes[path[i]][path[i + 1]]['bw'] > requested_bw:
@@ -228,6 +221,8 @@ def simulate_data_stream(nodes, hosts):
                 else:
                     nodes[path[i]][path[i + 1]]['bw'] = 0
                     nodes[path[i + 1]][path[i]]['bw'] = 0
+        else:
+            return
         # response = request_changes(links, path)
 
 
