@@ -1,16 +1,31 @@
 [
-  {
+    {
       "src":"h1",
       "dst":"h7",
       "protocol":"tcp",
       "max_bw":10,
       "window":36
     },
-  {
+    {
+      "src": "h2",
+      "dst": "h10",
+      "protocol":"udp",
+      "b_rate": 875,
+      "b_size": 1
+    },
+    {
       "src":"h2",
       "dst":"h8",
       "protocol":"tcp",
-      "max_bw":9.5,
-      "window":50
+      "max_bw":5,
+      "window":36
+    },
+    {
+      "src": "h4",
+      "dst": "h6",
+      "protocol":"udp",
+      "b_rate": 437,
+      "b_size": 1.5
     }
+
 ]

@@ -1,4 +1,5 @@
 import json
+
 import requests
 from operator import itemgetter
 import networkx as nx
@@ -9,55 +10,55 @@ def readNetwork(path_name):
         return json.load(readFile)
 
 
-def bellman_ford(graph, src, dest, weigh):
-    dist = {}
-    prev = {}
-
-    for switch in graph:
-        dist[switch] = float('inf')
-        prev[switch] = None
-
-    dist[src] = 0
-
-    for _ in range(len(graph) - 1):
-        for switch in graph:
-            for neighbor, edge_info in graph[switch].items():
-                # Calculate total weight considering bandwidth
-                total_weight = 0
-                for weight_name, weight_value in weigh.items():
-                    if weight_name == "delay":
-                        total_weight += float(edge_info[weight_name][:-2]) * weight_value
-                    else:
-                        total_weight += float(edge_info[weight_name]) * weight_value
-
-                # Update distance and bandwidth if a shorter path is found
-                if dist[switch] + total_weight < dist[neighbor]:
-                    dist[neighbor] = dist[switch] + total_weight
-                    prev[neighbor] = switch
-
-    for switch in graph:
-        for neighbor, edge_info in graph[switch].items():
-            # Calculate total weight considering bandwidth
-            total_weight = 0
-            for weight_name, weight_value in weigh.items():
-                if weight_name == "delay":
-                    total_weight += float(edge_info[weight_name][:-2]) * weight_value
-                else:
-                    total_weight += float(edge_info[weight_name]) * weight_value
-
-            # Check for negative weight cycle
-            if dist[switch] + total_weight < dist[neighbor]:
-                print("Graph contains a negative weight cycle")
-                return
-
-    # Reconstruct the path
-    path = []
-    current = dest
-    while current is not None:
-        path.insert(0, current)
-        current = prev[current]
-
-    return path
+# def bellman_ford(graph, src, dest, weigh):
+#     dist = {}
+#     prev = {}
+#
+#     for switch in graph:
+#         dist[switch] = float('inf')
+#         prev[switch] = None
+#
+#     dist[src] = 0
+#
+#     for _ in range(len(graph) - 1):
+#         for switch in graph:
+#             for neighbor, edge_info in graph[switch].items():
+#                 # Calculate total weight considering bandwidth
+#                 total_weight = 0
+#                 for weight_name, weight_value in weigh.items():
+#                     if weight_name == "delay":
+#                         total_weight += float(edge_info[weight_name][:-2]) * weight_value
+#                     else:
+#                         total_weight += float(edge_info[weight_name]) * weight_value
+#
+#                 # Update distance and bandwidth if a shorter path is found
+#                 if dist[switch] + total_weight < dist[neighbor]:
+#                     dist[neighbor] = dist[switch] + total_weight
+#                     prev[neighbor] = switch
+#
+#     for switch in graph:
+#         for neighbor, edge_info in graph[switch].items():
+#             # Calculate total weight considering bandwidth
+#             total_weight = 0
+#             for weight_name, weight_value in weigh.items():
+#                 if weight_name == "delay":
+#                     total_weight += float(edge_info[weight_name][:-2]) * weight_value
+#                 else:
+#                     total_weight += float(edge_info[weight_name]) * weight_value
+#
+#             # Check for negative weight cycle
+#             if dist[switch] + total_weight < dist[neighbor]:
+#                 print("Graph contains a negative weight cycle")
+#                 return
+#
+#     # Reconstruct the path
+#     path = []
+#     current = dest
+#     while current is not None:
+#         path.insert(0, current)
+#         current = prev[current]
+#
+#     return path
 
 
 def insert_data(device_id, port_in, port_out, dst):
@@ -96,7 +97,8 @@ def generate_config(ports, path):
 def request_changes(link, path):
     header = {'Content-Type': 'application/json', "Accept": "application/json"}
     content = json.dumps(generate_config(link, path))
-    requests.post("http://192.168.33.104:8181/onos/v1/flows", content, auth=('onos', 'rocks'), headers=header)
+    url = "http://192.168.33.104:8181/onos/v1/flows"
+    requests.post(url, content, auth=('onos', 'rocks'), headers=header)
 
 
 def find_paths_with_max_bw(graph, source, target, protocol, requested_bw=0):
@@ -129,6 +131,14 @@ def find_paths_with_max_bw(graph, source, target, protocol, requested_bw=0):
     return paths_with_max_bw
 
 
+def get_path_with_lowest_connections(paths):
+    min_path = len(paths[0])
+    for i in range(1,len(paths)):
+        if len(paths[i])<min_path:
+            min_path = len(paths[i])
+    return [path for path in paths if len(path) <= min_path]
+
+
 def calculate_delay(path, switches):
     delay = 0
     for i in range(len(path)-1):
@@ -152,7 +162,6 @@ def get_path_with_minmax_delay(paths, switches, desc, max_delay=float('inf')):
     return sorted(alt_result, key=itemgetter(1), reverse=desc)[0][0] if len(alt_result) != 1 else alt_result[0][0]
 
 
-
 def find_all_paths(graph, start, end):
     stack = [(start, [start])]
     paths = []
@@ -166,6 +175,13 @@ def find_all_paths(graph, start, end):
                 paths.append(new_path)
 
     return paths
+
+
+def get_new_flows(path):
+    resp = requests.get(url="http://192.168.33.104:8181/onos/v1/flows/of:" + '{:016X}'.format(int(path[0][1:])).lower(),
+                        auth=('onos', 'rocks'),
+                        headers={"Accept": "application/json"})
+    return resp.url,resp.content["flows"]
 
 
 def simulate_data_stream(nodes, hosts):
@@ -187,7 +203,8 @@ def simulate_data_stream(nodes, hosts):
         protocol = item['protocol']
         if protocol == 'tcp':
             max_delay = (item['window'] * 8 * 1024 ** 2) / (2*item['max_bw'] * 10 ** 6) if item['max_bw'] != 0 else 0
-            path = get_path_with_minmax_delay(find_paths_with_max_bw(nodes, src_switch, end_switch, 'tcp'), nodes, False, max_delay)
+            path = get_path_with_minmax_delay(get_path_with_lowest_connections(
+                find_paths_with_max_bw(nodes, src_switch, end_switch, 'tcp')), nodes, False, max_delay)
 
             bottleneck = 0
             for i in range(0, len(path) - 1):
@@ -214,7 +231,6 @@ def simulate_data_stream(nodes, hosts):
                 nodes[path[i]][path[i + 1]]['used_protocol'] = 'udp'
                 nodes[path[i + 1]][path[i]]['used_protocol'] = 'udp'
         request_changes(links, path)
-    print('x')
 
 
 if __name__ == "__main__":
