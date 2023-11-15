@@ -6,55 +6,6 @@ import requests
 from requests import Response
 
 
-# def bellman_ford(graph, src, dest, weigh):
-#     dist = {}
-#     prev = {}
-#
-#     for switch in graph:
-#         dist[switch] = float('inf')
-#         prev[switch] = None
-#
-#     dist[src] = 0
-#
-#     for _ in range(len(graph) - 1):
-#         for switch in graph:
-#             for neighbor, edge_info in graph[switch].items():
-#                 # Calculate total weight considering bandwidth
-#                 total_weight = 0
-#                 for weight_name, weight_value in weigh.items():
-#                     if weight_name == "delay":
-#                         total_weight += float(edge_info[weight_name][:-2]) * weight_value
-#                     else:
-#                         total_weight += float(edge_info[weight_name]) * weight_value
-#
-#                 # Update distance and bandwidth if a shorter path is found
-#                 if dist[switch] + total_weight < dist[neighbor]:
-#                     dist[neighbor] = dist[switch] + total_weight
-#                     prev[neighbor] = switch
-#
-#     for switch in graph:
-#         for neighbor, edge_info in graph[switch].items():
-#             # Calculate total weight considering bandwidth
-#             total_weight = 0
-#             for weight_name, weight_value in weigh.items():
-#                 if weight_name == "delay":
-#                     total_weight += float(edge_info[weight_name][:-2]) * weight_value
-#                 else:
-#                     total_weight += float(edge_info[weight_name]) * weight_value
-#
-#             # Check for negative weight cycle
-#             if dist[switch] + total_weight < dist[neighbor]:
-#                 print("Graph contains a negative weight cycle")
-#                 return
-#
-#     # Reconstruct the path
-#     path = []
-#     current = dest
-#     while current is not None:
-#         path.insert(0, current)
-#         current = prev[current]
-#
-#     return path
 def read_json_file(file_path: str) -> Dict:
     try:
         with open(file_path, 'r') as read_file:
@@ -73,7 +24,7 @@ def insert_data(device_id: int, port_in: str, port_out: str, dst: int) -> [str]:
     template["deviceId"] = template['deviceId'].replace('x', '{:016X}'.format(device_id).lower())
     template['treatment']['instructions'][0]['port'] = str(port_in)
     template['selector']['criteria'][0]['port'] = str(port_out)
-    template['selector']['criteria'][2]['ip'] = template['selector']['criteria'][2]['ip'].replace('y', dst[1:])
+    template['selector']['criteria'][2]['ip'] = template['selector']['criteria'][2]['ip'].replace('y', str(dst))
     return template
 
 
@@ -110,20 +61,22 @@ def request_changes(link, path) -> Response:
 
 
 def find_paths_with_max_bw(graph, source, target, requested_bw=0):
-    stack = [(source, [(source, None)], float('inf'))]
+    stack = [([source], float('inf'))]
     paths = []
 
     while stack:
-        current_node, current_path, min_bw = stack.pop()
+        current_path, min_bw = stack.pop()
+
+        current_node = current_path[-1]
 
         for neighbor, edge_info in graph[current_node].items():
-            if neighbor not in [node for node, _ in current_path]:
+            if neighbor not in current_path[:-1]:
                 next_bw = min(min_bw, edge_info["bw"])
 
                 if neighbor == target:
-                    paths.append((current_path + [(neighbor, None)], next_bw))
+                    paths.append((current_path + [neighbor], next_bw))
                 else:
-                    stack.append((neighbor, current_path + [(neighbor, None)], next_bw))
+                    stack.append((current_path + [neighbor], next_bw))
 
     max_bw = max(paths, key=lambda x: x[1], default=(None, 0))[1]
     if max_bw < requested_bw:
@@ -132,13 +85,10 @@ def find_paths_with_max_bw(graph, source, target, requested_bw=0):
         paths_with_max_bw = [path for path, bw in paths if max_bw >= bw >= requested_bw]
     else:
         paths_with_max_bw = [path for path, bw in paths if max_bw >= bw > requested_bw]
-    for i in range(len(paths_with_max_bw)):
-        for j in range(len(paths_with_max_bw[i])):
-            paths_with_max_bw[i][j] = paths_with_max_bw[i][j][0]
     return paths_with_max_bw
 
 
-def get_path_with_lowest_connections(paths):
+def get_path_with_lowest_number_of_connections(paths):
     min_path = len(paths[0])
     for i in range(1, len(paths)):
         if len(paths[i]) < min_path:
@@ -184,8 +134,8 @@ def find_all_paths(graph, start, end):
     return paths
 
 
-def get_new_flows(path) -> Tuple[str, Dict]:
-    url = "http://192.168.33.104:8181/onos/v1/flows/of:" + '{:016X}'.format(int(path[0][1:], 16)).lower()
+def get_new_flows(path, flow_id) -> Tuple[str, Dict]:
+    url = "http://192.168.33.104:8181/onos/v1/flows/of:" + '{:016X}'.format(int(path[0][1:], 16)).lower()+flow_id
     resp = requests.get(url=url, auth=('onos', 'rocks'), headers={"Accept": "application/json"})
 
     if resp.status_code == 200:
@@ -199,7 +149,8 @@ def get_new_flows(path) -> Tuple[str, Dict]:
 def simulate_data_stream(nodes, hosts):
     streams = read_json_file("streams.json")
     links = read_json_file("ports.json")
-
+    flow_history = []
+    used_bw = 0
     for item in streams:
         src = item['src']
         dst = item['dst']
@@ -207,24 +158,29 @@ def simulate_data_stream(nodes, hosts):
         end_switch = list(hosts[dst])[0]
         protocol = item['protocol']
         if protocol == 'tcp':
-            max_delay = (item['window'] * 8 * 1024 ** 2) / (2 * item['max_bw'] * 10 ** 6) if item['max_bw'] != 0 else 0
-            path = get_path_with_min_or_max_delay(get_path_with_lowest_connections(
-                find_paths_with_max_bw(nodes, src_switch, end_switch)), nodes, False, max_delay)
-
             max_bw = item['max_bw']
             window = item['window']
             max_delay = (window * 8 * 1024 ** 2) / (2 * max_bw * 10 ** 6) if max_bw != 0 else 0
-            path = get_path_with_min_or_max_delay(get_path_with_lowest_connections(
+            path = get_path_with_min_or_max_delay(get_path_with_lowest_number_of_connections(
                 find_paths_with_max_bw(nodes, src_switch, end_switch, max_bw)), nodes, True, max_delay)
-            eff_bw = window/calculate_delay(path, nodes)
+            eff_bw = round(8*window/(2*calculate_delay(path, nodes)))
             # reduce bandwidth by the value used in connection
-            for i in range(0, len(path) - 1):
-                nodes[path[i]][path[i + 1]]['bw'] -= eff_bw
-                nodes[path[i + 1]][path[i]]['bw'] -= eff_bw
+            if eff_bw <= max_bw:
+                used_bw = eff_bw
+                for i in range(0, len(path) - 1):
+                    nodes[path[i]][path[i + 1]]['bw'] -= eff_bw
+                    nodes[path[i + 1]][path[i]]['bw'] -= eff_bw
+            else:
+                used_bw = max_bw
+                for i in range(0, len(path) - 1):
+                    nodes[path[i]][path[i + 1]]['bw'] -= max_bw
+                    nodes[path[i + 1]][path[i]]['bw'] -= max_bw
+
         elif protocol == 'udp':
             requested_bw = item["b_rate"] * item['b_size'] * 0.008
             path = get_path_with_min_or_max_delay(
                 find_paths_with_max_bw(nodes, src_switch, end_switch, requested_bw), nodes, False)
+            used_bw = requested_bw
             for i in range(0, len(path) - 1):
                 if nodes[path[i]][path[i + 1]]['bw'] > requested_bw:
                     nodes[path[i]][path[i + 1]]['bw'] -= requested_bw
@@ -234,8 +190,9 @@ def simulate_data_stream(nodes, hosts):
                     nodes[path[i + 1]][path[i]]['bw'] = 0
         else:
             return
-        # response = request_changes(links, path)
-        # print(response)
+        response = request_changes(links, path)
+        device_id,flow_id = response.json()["flows"][0].values()
+        flow_history.append([device_id,flow_id,used_bw])
 
 
 if __name__ == "__main__":
