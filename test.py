@@ -1,3 +1,4 @@
+import asyncio
 import json
 from operator import itemgetter
 from typing import Dict, Tuple
@@ -34,22 +35,27 @@ def generate_config(ports: [str], path):
     # two-way connection from source host and switch directly linked
     def add_flow(src: int, src_port: str, dst_port: str, dst: int) -> None:
         flows.append(insert_data(src, src_port, dst_port, dst))
+
     for i, switch in enumerate(path):
         current_id = path[i]
         src_id = path[i - 1] if i > 0 else None
         dst_id = path[i + 1] if i < len(path) - 1 else None
 
         if src_id and dst_id:
+            # center
             add_flow(int(current_id[1:]), ports[current_id][src_id], ports[current_id][dst_id], int(path[0][1:]))
             add_flow(int(current_id[1:]), ports[current_id][dst_id], ports[current_id][src_id], int(path[-1][1:]))
         elif dst_id:
+            # beginning
             host_port = str(len(ports[current_id]) + 1)
             add_flow((int(current_id[1:])), host_port, ports[current_id][dst_id], int(path[0][1:]))
             add_flow((int(current_id[1:])), ports[current_id][dst_id], host_port, int(path[-1][1:]))
         elif src_id:
+            # end
             host_port = str(len(ports[current_id]) + 1)
             add_flow((int(current_id[1:])), ports[current_id][src_id], host_port, int(path[0][1:]))
             add_flow((int(current_id[1:])), host_port, ports[current_id][src_id], int(path[-1][1:]))
+
     return {"flows": flows}
 
 
@@ -135,14 +141,15 @@ def find_all_paths(graph, start, end):
 
 
 def get_new_flows(path, flow_id) -> Tuple[str, Dict]:
-    url = "http://192.168.33.104:8181/onos/v1/flows/of:" + '{:016X}'.format(int(path[0][1:], 16)).lower()+flow_id
+    url = "http://192.168.33.104:8181/onos/v1/flows/of:" + '{:016X}'.format(int(path[0][1:], 16)).lower() + flow_id
     resp = requests.get(url=url, auth=('onos', 'rocks'), headers={"Accept": "application/json"})
 
     if resp.status_code == 200:
         return resp.url, resp.json().get("flows", {})
     else:
         # Handle HTTP error status codes
-        print(f"Error: {resp.status_code}")
+        print(f"Error: {resp.status_code}\n")
+        print(f"Error: {resp.content}")
         return resp.url, {}
 
 
@@ -163,7 +170,7 @@ def simulate_data_stream(nodes, hosts):
             max_delay = (window * 8 * 1024 ** 2) / (2 * max_bw * 10 ** 6) if max_bw != 0 else 0
             path = get_path_with_min_or_max_delay(get_path_with_lowest_number_of_connections(
                 find_paths_with_max_bw(nodes, src_switch, end_switch, max_bw)), nodes, True, max_delay)
-            eff_bw = round(8*window/(2*calculate_delay(path, nodes)))
+            eff_bw = round(8 * window / (2 * calculate_delay(path, nodes)))
             # reduce bandwidth by the value used in connection
             if eff_bw <= max_bw:
                 used_bw = eff_bw
@@ -181,6 +188,7 @@ def simulate_data_stream(nodes, hosts):
             path = get_path_with_min_or_max_delay(
                 find_paths_with_max_bw(nodes, src_switch, end_switch, requested_bw), nodes, False)
             used_bw = requested_bw
+
             for i in range(0, len(path) - 1):
                 if nodes[path[i]][path[i + 1]]['bw'] > requested_bw:
                     nodes[path[i]][path[i + 1]]['bw'] -= requested_bw
@@ -191,12 +199,47 @@ def simulate_data_stream(nodes, hosts):
         else:
             return
         response = request_changes(links, path)
-        device_id,flow_id = response.json()["flows"][0].values()
-        flow_history.append([device_id,flow_id,used_bw])
+        device_id, flow_id = response.json()["flows"][0].values()
+        flow_history.append([device_id, flow_id, used_bw])
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(check_flows_periodically(flow_history))
+    loop.close()
+
+
+async def check_if_flow_still_lasts(device_id, flow_id):
+    url = f"http://192.168.33.104:8181/onos/v1/flows/{device_id}/{flow_id}"
+    resp = await loop.run_in_executor(None, lambda: requests.get(url=url, auth=('onos', 'rocks'),
+                                                                 headers={"Accept": "application/json"}))
+
+    if resp.status_code == 200:
+        return resp.json().get("flows", {})
+    else:
+        # Handle HTTP error status codes
+        print(f"Error: {resp.status_code}\n")
+        print(f"Error: {resp.content}")
+        return {}
+
+
+async def check_flows_periodically(flow_history, interval_seconds=5):
+    while True:
+        updated_flow_history = []
+        for device_id, flow_id, used_bw in flow_history:
+            flow_status = await check_if_flow_still_lasts(device_id, flow_id)
+            if flow_status:
+                # The flow is still active, keep it in the updated list
+                updated_flow_history.append((device_id, flow_id, used_bw))
+            else:
+                print(f'Flow with id:{flow_id} from device with id:{device_id} has ended.')
+
+        # Update the flow_history with the list of active flows
+        flow_history[:] = updated_flow_history
+
+        await asyncio.sleep(interval_seconds)
 
 
 if __name__ == "__main__":
     network_graph = read_json_file('network.json')
     SWITCHES: [] = network_graph['switches']
     HOSTS: [] = network_graph['hosts']
+    loop = asyncio.get_event_loop()
     simulate_data_stream(SWITCHES, HOSTS)
