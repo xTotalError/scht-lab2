@@ -1,7 +1,7 @@
 {
   "priority": 40000,
-  "isPermanent": false,
-  "timeout":"30",
+  "isPermanent": true,
+  "timeout":"10",
   "deviceId": "of:x",
   "treatment": {
     "instructions": [

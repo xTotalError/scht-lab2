@@ -83,16 +83,22 @@ def generate_config(ports: [str], path):
     # two-way connection from source host and switch directly linked
     def add_flow(src: int, src_port: str, dst_port: str, dst: int) -> None:
         flows.append(insert_data(src, src_port, dst_port, dst))
-
     for i, switch in enumerate(path):
         current_id = path[i]
         src_id = path[i - 1] if i > 0 else None
         dst_id = path[i + 1] if i < len(path) - 1 else None
 
         if src_id and dst_id:
-            add_flow(int(current_id[1:]), ports[current_id][src_id], ports[current_id][dst_id], path[0])
-            add_flow(int(current_id[1:]), ports[current_id][src_id], ports[current_id][dst_id], path[-1])
-
+            add_flow(int(current_id[1:]), ports[current_id][src_id], ports[current_id][dst_id], int(path[0][1:]))
+            add_flow(int(current_id[1:]), ports[current_id][dst_id], ports[current_id][src_id], int(path[-1][1:]))
+        elif dst_id:
+            host_port = str(len(ports[current_id]) + 1)
+            add_flow((int(current_id[1:])), host_port, ports[current_id][dst_id], int(path[0][1:]))
+            add_flow((int(current_id[1:])), ports[current_id][dst_id], host_port, int(path[-1][1:]))
+        elif src_id:
+            host_port = str(len(ports[current_id]) + 1)
+            add_flow((int(current_id[1:])), ports[current_id][src_id], host_port, int(path[0][1:]))
+            add_flow((int(current_id[1:])), host_port, ports[current_id][src_id], int(path[-1][1:]))
     return {"flows": flows}
 
 
@@ -129,7 +135,6 @@ def find_paths_with_max_bw(graph, source, target, requested_bw=0):
     for i in range(len(paths_with_max_bw)):
         for j in range(len(paths_with_max_bw[i])):
             paths_with_max_bw[i][j] = paths_with_max_bw[i][j][0]
-
     return paths_with_max_bw
 
 
@@ -206,10 +211,16 @@ def simulate_data_stream(nodes, hosts):
             path = get_path_with_min_or_max_delay(get_path_with_lowest_connections(
                 find_paths_with_max_bw(nodes, src_switch, end_switch)), nodes, False, max_delay)
 
+            max_bw = item['max_bw']
+            window = item['window']
+            max_delay = (window * 8 * 1024 ** 2) / (2 * max_bw * 10 ** 6) if max_bw != 0 else 0
+            path = get_path_with_min_or_max_delay(get_path_with_lowest_connections(
+                find_paths_with_max_bw(nodes, src_switch, end_switch, max_bw)), nodes, True, max_delay)
+            eff_bw = window/calculate_delay(path, nodes)
             # reduce bandwidth by the value used in connection
             for i in range(0, len(path) - 1):
-                nodes[path[i]][path[i + 1]]['bw'] -= item['max_bw']
-                nodes[path[i + 1]][path[i]]['bw'] -= item['max_bw']
+                nodes[path[i]][path[i + 1]]['bw'] -= eff_bw
+                nodes[path[i + 1]][path[i]]['bw'] -= eff_bw
         elif protocol == 'udp':
             requested_bw = item["b_rate"] * item['b_size'] * 0.008
             path = get_path_with_min_or_max_delay(
@@ -224,6 +235,7 @@ def simulate_data_stream(nodes, hosts):
         else:
             return
         # response = request_changes(links, path)
+        # print(response)
 
 
 if __name__ == "__main__":

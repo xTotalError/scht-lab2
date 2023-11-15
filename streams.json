@@ -24,8 +24,8 @@
       "src": "h4",
       "dst": "h6",
       "protocol":"udp",
-      "b_rate": 437,
-      "b_size": 1.5
+      "b_rate": 875,
+      "b_size": 1
     }
 
 ]
