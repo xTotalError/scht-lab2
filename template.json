@@ -1,6 +1,6 @@
 {
   "priority": 40000,
-  "isPermanent": true,
+  "isPermanent": false,
   "timeout":"10",
   "deviceId": "of:x",
   "treatment": {
@@ -28,3 +28,9 @@
     ]
   }
 }
+
+
+
+
+
+

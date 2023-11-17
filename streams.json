@@ -26,6 +26,12 @@
       "protocol":"udp",
       "b_rate": 875,
       "b_size": 1
+    },
+    {
+      "src":"h7",
+      "dst":"h9",
+      "protocol":"tcp",
+      "max_bw":3,
+      "window":50
     }
-
 ]
