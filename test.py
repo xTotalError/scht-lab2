@@ -29,7 +29,7 @@ def insert_data(device_id: int, port_in: str, port_out: str, dst: int) -> [str]:
     return template
 
 
-def generate_config(ports: [str], path):
+def generate_config(ports: [str], path: [str]) -> Dict:
     flows = []
 
     # two-way connection from source host and switch directly linked
@@ -66,7 +66,7 @@ def request_changes(link, path) -> Response:
     return requests.post(url, content, auth=('onos', 'rocks'), headers=header)
 
 
-def find_paths_with_max_bw(graph, source, target, requested_bw=0):
+def find_paths_with_max_bw(graph: [str], source: str, target: str, requested_bw: int) -> [[str]]:
     stack = [([source], float('inf'))]
     paths = []
 
@@ -92,7 +92,7 @@ def find_paths_with_max_bw(graph, source, target, requested_bw=0):
     return paths_with_max_bw
 
 
-def get_path_with_lowest_number_of_connections(paths):
+def get_path_with_lowest_number_of_connections(paths: [[str]]) -> [[str]]:
     min_path = len(paths[0])
     for i in range(1, len(paths)):
         if len(paths[i]) < min_path:
@@ -100,14 +100,14 @@ def get_path_with_lowest_number_of_connections(paths):
     return [path for path in paths if len(path) <= min_path]
 
 
-def calculate_delay(path, switches):
+def calculate_delay(path: [str], switches: [str]) -> float:
     delay = 0
     for i in range(len(path) - 1):
         delay += float(switches[path[i]][path[i + 1]]["delay"][:-2])
     return delay
 
 
-def get_path_with_min_or_max_delay(paths, switches, desc, max_delay=float('inf')):
+def get_path_with_min_or_max_delay(paths: [[str]], switches: [str], desc: bool, max_delay=float('inf')) -> [str]:
     result = []
     alt_result = []
     for path in paths:
@@ -117,9 +117,7 @@ def get_path_with_min_or_max_delay(paths, switches, desc, max_delay=float('inf')
         else:
             alt_result.append([path, delay])
     if result:
-        print(sorted(result, key=itemgetter(1), reverse=desc)[0] if len(result) != 1 else result[0])
         return sorted(result, key=itemgetter(1), reverse=desc)[0][0] if len(result) != 1 else result[0][0]
-    print(sorted(alt_result, key=itemgetter(1), reverse=desc)[0] if len(alt_result) != 1 else alt_result[0])
     return sorted(alt_result, key=itemgetter(1), reverse=desc)[0][0] if len(alt_result) != 1 else alt_result[0][0]
 
 
@@ -138,6 +136,59 @@ def check_if_paths_with_loss(paths, nodes):
         return paths
 
 
+def find_path_for_tcp_connection(item, nodes, src_switch, end_switch):
+    max_bw = item['max_bw']
+    window = item['window']
+    max_delay = (window * 8 * 1024 ** 2) / (2 * max_bw * 10 ** 6) if max_bw != 0 else 0
+    paths_with_max_bw = find_paths_with_max_bw(nodes, src_switch, end_switch, max_bw)
+
+    if paths_with_max_bw:
+        path = get_path_with_min_or_max_delay(get_path_with_lowest_number_of_connections(
+            check_if_paths_with_loss(paths_with_max_bw, nodes)), nodes, True, max_delay)
+    else:
+        print(f"Connection({item}) Failed: Insufficient Bandwidth.")
+        return False
+    eff_bw = round(8 * window / (2 * calculate_delay(path, nodes)))
+
+    # reduce bandwidth by the value used in connection
+    used_bw = [eff_bw, max_bw][eff_bw > max_bw]
+
+    for i in range(0, len(path) - 1):
+        nodes[path[i]][path[i + 1]]['bw'] -= max_bw
+        nodes[path[i + 1]][path[i]]['bw'] -= max_bw
+    return path, used_bw
+
+
+def find_path_for_udp_connection(item, nodes, src_switch, end_switch):
+    requested_bw = item["b_rate"] * item['b_size'] * 0.008
+    paths_with_max_bw = find_paths_with_max_bw(nodes, src_switch, end_switch, requested_bw)
+
+    if paths_with_max_bw:
+        path = get_path_with_min_or_max_delay(check_if_paths_with_loss(
+            paths_with_max_bw, nodes), nodes, False)
+    else:
+        print(f"Connection({item}) Failed: Insufficient Bandwidth.")
+        return False
+
+    # reduce bandwidth by the value used in connection
+    for i in range(0, len(path) - 1):
+        if nodes[path[i]][path[i + 1]]['bw'] > requested_bw:
+            nodes[path[i]][path[i + 1]]['bw'] -= requested_bw
+            nodes[path[i + 1]][path[i]]['bw'] -= requested_bw
+        else:
+            nodes[path[i]][path[i + 1]]['bw'] = 0
+            nodes[path[i + 1]][path[i]]['bw'] = 0
+    return path, requested_bw
+
+
+def print_path(path):
+    line = f"Path between h{path[0][1:]} and h{path[-1][1:]}: h{path[0][1:]}"
+    for switch in path:
+        line += f"-{switch}"
+    line += f"-h{path[-1][1:]}"
+    print(line)
+
+
 def simulate_data_stream(nodes, hosts, file_name, flow_history):
     streams = read_json_file(file_name)
     links = read_json_file("ports.json")
@@ -148,51 +199,19 @@ def simulate_data_stream(nodes, hosts, file_name, flow_history):
         end_switch = list(hosts[dst])[0]
         protocol = item['protocol']
         if protocol == 'tcp':
-            max_bw = item['max_bw']
-            window = item['window']
-            max_delay = (window * 8 * 1024 ** 2) / (2 * max_bw * 10 ** 6) if max_bw != 0 else 0
-            paths_with_max_bw = find_paths_with_max_bw(nodes, src_switch, end_switch, max_bw)
-            if paths_with_max_bw:
-                path = get_path_with_min_or_max_delay(get_path_with_lowest_number_of_connections(
-                    check_if_paths_with_loss(paths_with_max_bw, nodes)), nodes, True, max_delay)
-            else:
-                print(f"Connection({item}) Failed: Insufficient Bandwidth.")
+            path, used_bw = find_path_for_tcp_connection(item, nodes, src_switch, end_switch)
+            if not path:
                 continue
-            eff_bw = round(8 * window / (2 * calculate_delay(path, nodes)))
-            # reduce bandwidth by the value used in connection
-            if eff_bw <= max_bw:
-                used_bw = eff_bw
-                for i in range(0, len(path) - 1):
-                    nodes[path[i]][path[i + 1]]['bw'] -= eff_bw
-                    nodes[path[i + 1]][path[i]]['bw'] -= eff_bw
-            else:
-                used_bw = max_bw
-                for i in range(0, len(path) - 1):
-                    nodes[path[i]][path[i + 1]]['bw'] -= max_bw
-                    nodes[path[i + 1]][path[i]]['bw'] -= max_bw
-        elif protocol == 'udp':
-            requested_bw = item["b_rate"] * item['b_size'] * 0.008
-            paths_with_max_bw = find_paths_with_max_bw(nodes, src_switch, end_switch, requested_bw)
-            if paths_with_max_bw:
-                path = get_path_with_min_or_max_delay(check_if_paths_with_loss(
-                    paths_with_max_bw, nodes), nodes, False)
-            else:
-                print(f"Connection({item}) Failed: Insufficient Bandwidth.")
-                continue
-            used_bw = requested_bw
 
-            for i in range(0, len(path) - 1):
-                if nodes[path[i]][path[i + 1]]['bw'] > requested_bw:
-                    nodes[path[i]][path[i + 1]]['bw'] -= requested_bw
-                    nodes[path[i + 1]][path[i]]['bw'] -= requested_bw
-                else:
-                    nodes[path[i]][path[i + 1]]['bw'] = 0
-                    nodes[path[i + 1]][path[i]]['bw'] = 0
+        elif protocol == 'udp':
+            path, used_bw = find_path_for_udp_connection(item, nodes, src_switch, end_switch)
         else:
             return
+        print_path(path)
         response = request_changes(links, path)
         device_id, flow_id = response.json()["flows"][0].values()
         flow_history.append([device_id, flow_id, used_bw, path])
+
     return flow_history, nodes
 
 
@@ -220,12 +239,18 @@ def update_network(nodes, used_bw, path):
 async def check_flows_periodically(nodes, flow_history, interval_seconds=1):
     while flow_history:
         updated_flow_history = []
+
         for device_id, flow_id, used_bw, path in flow_history:
+
+            starting_host_id = path[0]
+            ending_host_id = path[-1]
+
             flow_status = await check_if_flow_still_lasts(device_id, flow_id)
             if flow_status:
                 # The flow is still active, keep it in the updated list
                 updated_flow_history.append((device_id, flow_id, used_bw, path))
             else:
+                print(f"Data flow between h{starting_host_id[1:]} to h{ending_host_id[1:]} has ended")
                 nodes = update_network(nodes, used_bw, path)
 
         # Update the flow_history with the list of active flows
